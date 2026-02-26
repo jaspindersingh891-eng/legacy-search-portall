@@ -1,0 +1,75 @@
+import streamlit as st
+import pandas as pd
+
+st.set_page_config(page_title="Master Search Portal", layout="wide")
+
+@st.cache_data
+def load_and_merge_data():
+    try:
+        # Load File 1 (Legacy Mapping)
+        df1 = pd.read_csv("data1.csv")
+        df1.columns = df1.columns.str.strip()
+        # In File 1, ACCTID is Old Legacy, and LEGACYACCTID is the SAP Account No
+        df1 = df1.rename(columns={'ACCTID': 'OLD_LEGACY_ID', 'LEGACYACCTID': 'ACCOUNT_NO'})
+
+        # Load File 2 (SAP & Location Details)
+        df2 = pd.read_csv("data2.csv")
+        df2.columns = df2.columns.str.strip()
+        # ACCOUNT_NO is the common key
+
+        # Merge both files into one Master Dataframe
+        # We use an 'outer' merge so we don't lose any records if they are only in one file
+        master_df = pd.merge(df1, df2, on='ACCOUNT_NO', how='outer', suffixes=('_f1', '_f2'))
+        
+        # Clean up Names and Addresses that might be in both
+        master_df['NAME'] = master_df['NAME_f2'].fillna(master_df['NAME_f1'])
+        master_df['ADDRESS'] = master_df['ADDRESS_f2'].fillna(master_df['ADDRESS_f1'])
+        master_df['METER_NUMBER'] = master_df['METER_NUMBER'].fillna(master_df['MTR_SER_NO'])
+        
+        return master_df
+    except Exception as e:
+        st.error(f"Error merging files: {e}. Ensure data1.csv and data2.csv are in GitHub.")
+        return None
+
+df = load_and_merge_data()
+
+st.title("📂 Master Account Search (Dual-File)")
+st.markdown("Search by **Account ID**, **Name**, **Meter**, or **Address Code** (e.g. `241022`)")
+
+search_query = st.text_input("Start Typing to Search:", placeholder="Example: S42BS241022N or 241022")
+
+if df is not None:
+    if search_query:
+        # Search across all columns (Name, Address, IDs, etc.)
+        mask = df.astype(str).apply(
+            lambda x: x.str.contains(search_query, case=False, na=False)
+        ).any(axis=1)
+        results = df[mask]
+
+        if not results.empty:
+            st.success(f"Found {len(results)} matches across both files.")
+            for _, row in results.iterrows():
+                with st.expander(f"📌 {row.get('NAME', 'N/A')} | SAP: {row.get('ACCOUNT_NO', 'N/A')}"):
+                    c1, c2, c3 = st.columns(3)
+                    
+                    with c1:
+                        st.subheader("🆔 Account IDs")
+                        st.write(f"**SAP Account:** `{row.get('ACCOUNT_NO', 'N/A')}`")
+                        st.write(f"**Legacy ID:** `{row.get('OLD_LEGACY_ID', 'N/A')}`")
+                        st.write(f"**MRU/Village:** {row.get('Village/MRU', 'N/A')}")
+                    
+                    with c2:
+                        st.subheader("⚡ Meter Details")
+                        st.write(f"**Meter No:** `{row.get('METER_NUMBER', 'N/A')}`")
+                        st.write(f"**Group:** {row.get('GROUP_NAME', 'N/A')}")
+                        st.write(f"**Phone:** {row.get('PHONE', 'N/A')}")
+                    
+                    with c3:
+                        st.subheader("📍 Location")
+                        st.write(f"**Address:** {row.get('ADDRESS', 'N/A')}")
+                        if pd.notnull(row.get('LATITUDE')):
+                            st.link_button("🌐 View on Map", f"https://www.google.com/maps?q={row['LATITUDE']},{row['LONGITUDE']}")
+        else:
+            st.warning("No record found. Try a partial code (e.g., just the last 6 digits).")
+    else:
+        st.info("The system is ready. Searching across both Legacy and SAP databases.")
