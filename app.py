@@ -3,7 +3,7 @@ import pandas as pd
 import os
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Sangrur Sub-Division Search", layout="wide")
+st.set_page_config(page_title="Sangrur Field Search Portal", layout="wide")
 
 def make_columns_unique(df):
     """Ensures all columns have unique names to prevent system crashes."""
@@ -28,6 +28,7 @@ def load_all_data():
     data_list = []
     for file in all_files:
         try:
+            # Read file with low_memory=False to handle mixed data types
             temp_df = pd.read_csv(file, low_memory=False)
             temp_df.columns = temp_df.columns.str.strip()
             
@@ -61,7 +62,7 @@ def load_all_data():
 # --- LOAD DATA ---
 df = load_all_data()
 
-# --- SIDEBAR: SUBDIVISION FILTER ONLY ---
+# --- SIDEBAR: SUBDIVISION FILTER ---
 st.sidebar.header("📂 Filter by Area")
 selected_sub = "All SubDivisions"
 
@@ -78,23 +79,27 @@ if df is not None:
     if selected_sub != "All SubDivisions":
         filtered_df = filtered_df[filtered_df['SubDivision'] == selected_sub]
 
-    # Smart Search Box (Handles 'gt41 10144' logic)
+    # Smart Search Box
     search_input = st.text_input("Search Name, ID, or Address Code:", placeholder="Ex: gt41 10144")
 
     if search_input:
         search_words = search_input.lower().split()
-        # Search relevant columns including the Address where your codes live
+        # Search columns
         search_cols = ['NAME', 'ADDRESS', 'SAP_ID', 'LEGACY_DISPLAY', 'METER_DISPLAY', 'Village/MRU']
         available_cols = [c for c in search_cols if c in filtered_df.columns]
         
-        row_strings = filtered_df[available_cols].astype(str).apply(lambda x: ' '.join(x).lower(), axis=1)
+        # --- FIXED SEARCH LOGIC (Line 90 Fix) ---
+        # Instead of just .astype(str), we handle nulls and convert carefully
+        def create_search_string(row):
+            return ' '.join(row.dropna().astype(str).values).lower()
+
+        row_strings = filtered_df[available_cols].apply(create_search_string, axis=1)
         mask = row_strings.apply(lambda row: all(word in row for word in search_words))
         results = filtered_df[mask]
 
         if not results.empty:
             st.success(f"Found {len(results)} matching accounts.")
             for _, row in results.iterrows():
-                # Display only the specific results you requested
                 with st.expander(f"👤 {row.get('NAME', 'N/A')} | SAP: {row.get('SAP_ID', 'N/A')}"):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -106,11 +111,9 @@ if df is not None:
                         st.write(f"**MRU:** {row.get('Village/MRU', 'N/A')}")
                         st.write(f"**Meter Serial Number:** `{row.get('METER_DISPLAY', 'N/A')}`")
                         
-                        # Location Section
                         if pd.notnull(row.get('LATITUDE')) and pd.notnull(row.get('LONGITUDE')):
-                            st.write(f"**Coordinates:** {row['LATITUDE']}, {row['LONGITUDE']}")
                             st.link_button("🌐 Open Location in Google Maps", f"https://www.google.com/maps?q={row['LATITUDE']},{row['LONGITUDE']}")
                         else:
                             st.write("**Location:** Not available")
         else:
-            st.warning("No matches found. Try a different search term.")
+            st.warning("No matches found.")
