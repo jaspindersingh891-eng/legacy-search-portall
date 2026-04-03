@@ -28,7 +28,6 @@ def load_all_data():
     data_list = []
     for file in all_files:
         try:
-            # Read file with low_memory=False to handle mixed data types
             temp_df = pd.read_csv(file, low_memory=False)
             temp_df.columns = temp_df.columns.str.strip()
             
@@ -44,9 +43,9 @@ def load_all_data():
 
             # 2. Map various names to 'Meter Serial'
             if 'METER_NUMBER' in temp_df.columns:
-                temp_df['METER_DISPLAY'] = temp_df['METER_NUMBER']
+                temp_df['METER_DISPLAY'] = temp_df['METER_NUMBER'].astype(str).str.replace(r'\.0$', '', regex=True)
             elif 'MTR_SER_NO' in temp_df.columns:
-                temp_df['METER_DISPLAY'] = temp_df['MTR_SER_NO']
+                temp_df['METER_DISPLAY'] = temp_df['MTR_SER_NO'].astype(str).str.replace(r'\.0$', '', regex=True)
 
             temp_df['SOURCE_FILE'] = file
             temp_df = make_columns_unique(temp_df)
@@ -57,7 +56,15 @@ def load_all_data():
     if not data_list:
         return None
 
-    return pd.concat(data_list, axis=0, ignore_index=True, sort=False)
+    # Stack all files
+    combined_df = pd.concat(data_list, axis=0, ignore_index=True, sort=False)
+    
+    # --- DE-DUPLICATION STEP ---
+    # If SAP_ID, Name, and Legacy ID are all the same, keep only 1 row
+    if 'SAP_ID' in combined_df.columns and 'NAME' in combined_df.columns:
+        combined_df = combined_df.drop_duplicates(subset=['SAP_ID', 'NAME'], keep='first')
+    
+    return combined_df
 
 # --- LOAD DATA ---
 df = load_all_data()
@@ -74,22 +81,17 @@ if df is not None and 'SubDivision' in df.columns:
 st.title("⚡ Sangrur Field Search Portal")
 
 if df is not None:
-    # Apply SubDivision Filter
     filtered_df = df.copy()
     if selected_sub != "All SubDivisions":
         filtered_df = filtered_df[filtered_df['SubDivision'] == selected_sub]
 
-    # Smart Search Box
     search_input = st.text_input("Search Name, ID, or Address Code:", placeholder="Ex: gt41 10144")
 
     if search_input:
         search_words = search_input.lower().split()
-        # Search columns
         search_cols = ['NAME', 'ADDRESS', 'SAP_ID', 'LEGACY_DISPLAY', 'METER_DISPLAY', 'Village/MRU']
         available_cols = [c for c in search_cols if c in filtered_df.columns]
         
-        # --- FIXED SEARCH LOGIC (Line 90 Fix) ---
-        # Instead of just .astype(str), we handle nulls and convert carefully
         def create_search_string(row):
             return ' '.join(row.dropna().astype(str).values).lower()
 
@@ -98,8 +100,9 @@ if df is not None:
         results = filtered_df[mask]
 
         if not results.empty:
-            st.success(f"Found {len(results)} matching accounts.")
+            st.success(f"Found {len(results)} unique record(s).")
             for _, row in results.iterrows():
+                # Display the exact details you requested
                 with st.expander(f"👤 {row.get('NAME', 'N/A')} | SAP: {row.get('SAP_ID', 'N/A')}"):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -114,6 +117,6 @@ if df is not None:
                         if pd.notnull(row.get('LATITUDE')) and pd.notnull(row.get('LONGITUDE')):
                             st.link_button("🌐 Open Location in Google Maps", f"https://www.google.com/maps?q={row['LATITUDE']},{row['LONGITUDE']}")
                         else:
-                            st.write("**Location:** Not available")
+                            st.write("**Location:** Not available (Coordinates missing)")
         else:
             st.warning("No matches found.")
