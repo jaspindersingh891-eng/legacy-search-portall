@@ -1,76 +1,96 @@
 import streamlit as st
 import pandas as pd
+import os
 
-# 1. Page Config
-st.set_page_config(page_title="Master Search Portal", layout="wide")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="Sangrur Master Search & Filter", layout="wide")
 
 @st.cache_data
-def load_and_merge_data():
-    try:
-        # Load File 1 (Legacy Mapping)
-        df1 = pd.read_csv("data1.csv")
-        df1.columns = df1.columns.str.strip()
-        
-        # Rename and force to String (Text)
-        df1 = df1.rename(columns={'ACCTID': 'OLD_LEGACY_ID', 'LEGACYACCTID': 'ACCOUNT_NO'})
-        df1['ACCOUNT_NO'] = df1['ACCOUNT_NO'].astype(str).str.strip().str.split('.').str[0]
-
-        # Load File 2 (SAP & Location Details)
-        df2 = pd.read_csv("data2.csv")
-        df2.columns = df2.columns.str.strip()
-        
-        # Force to String (Text) to match File 1
-        df2['ACCOUNT_NO'] = df2['ACCOUNT_NO'].astype(str).str.strip().str.split('.').str[0]
-
-        # Merge both files on the cleaned Text column
-        master_df = pd.merge(df1, df2, on='ACCOUNT_NO', how='outer', suffixes=('_f1', '_f2'))
-        
-        # Combine Names and Addresses
-        master_df['NAME'] = master_df['NAME_f2'].fillna(master_df['NAME_f1'])
-        master_df['ADDRESS'] = master_df['ADDRESS_f2'].fillna(master_df['ADDRESS_f1'])
-        
-        # Handle different meter column names
-        m_col = 'METER_NUMBER' if 'METER_NUMBER' in master_df.columns else 'MTR_SER_NO'
-        master_df['FINAL_METER'] = master_df[m_col].fillna(master_df.get('MTR_SER_NO', 'N/A'))
-        
-        return master_df
-    except Exception as e:
-        st.error(f"Error: {e}")
+def load_all_data():
+    all_files = [f for f in os.listdir('.') if f.endswith('.csv')]
+    if not all_files:
         return None
 
-df = load_and_merge_data()
+    combined_df = pd.DataFrame()
 
-# --- Search Interface ---
-st.title("📂 Sangrur Master Search")
-st.markdown("Search by **Account ID**, **Name**, **Meter**, or **Address Code** (e.g. `241022`)")
+    for file in all_files:
+        try:
+            temp_df = pd.read_csv(file)
+            temp_df.columns = temp_df.columns.str.strip()
+            # Track which file the data came from
+            temp_df['SOURCE_FILE'] = file
 
-search_query = st.text_input("Enter Search Term:", placeholder="Start typing...")
+            for col in ['ACCOUNT_NO', 'LEGACYACCTID', 'ACCTID']:
+                if col in temp_df.columns:
+                    temp_df[col] = temp_df[col].astype(str).str.strip().str.split('.').str[0]
+                    if col != 'ACCOUNT_NO':
+                        temp_df = temp_df.rename(columns={col: 'ACCOUNT_NO'})
+
+            if combined_df.empty:
+                combined_df = temp_df
+            else:
+                if 'ACCOUNT_NO' in combined_df.columns and 'ACCOUNT_NO' in temp_df.columns:
+                    combined_df = pd.merge(combined_df, temp_df, on='ACCOUNT_NO', how='outer', suffixes=('', '_dup'))
+                else:
+                    combined_df = pd.concat([combined_df, temp_df], ignore_index=True)
+        except Exception as e:
+            st.warning(f"Error reading {file}: {e}")
+
+    combined_df = combined_df.loc[:, ~combined_df.columns.str.contains('_dup')]
+    return combined_df
+
+df = load_all_data()
+
+# --- SIDEBAR FILTERS ---
+st.sidebar.header("📍 Filter Results")
 
 if df is not None:
-    if search_query:
-        # Powerful search across all columns
-        mask = df.astype(str).apply(
-            lambda x: x.str.contains(search_query, case=False, na=False)
-        ).any(axis=1)
-        results = df[mask]
+    # 1. Filter by SubDivision
+    if 'SubDivision' in df.columns:
+        subs = ["All SubDivisions"] + sorted(df['SubDivision'].dropna().unique().tolist())
+        selected_sub = st.sidebar.selectbox("Select SubDivision:", subs)
+    else:
+        selected_sub = "All SubDivisions"
+
+    # 2. Filter by File Name
+    files = ["All Files"] + sorted(df['SOURCE_FILE'].dropna().unique().tolist())
+    selected_file = st.sidebar.selectbox("Select Data File:", files)
+
+# --- MAIN INTERFACE ---
+st.title("⚡ Sangrur Division Search Portal")
+
+if df is not None:
+    # Apply Sidebar Filters to the data before searching
+    filtered_df = df.copy()
+    if selected_sub != "All SubDivisions":
+        filtered_df = filtered_df[filtered_df['SubDivision'] == selected_sub]
+    if selected_file != "All Files":
+        filtered_df = filtered_df[filtered_df['SOURCE_FILE'] == selected_file]
+
+    search_input = st.text_input("Enter Search Details (Ex: 'gt41 10144'):")
+
+    if search_input:
+        search_words = search_input.lower().split()
+        row_strings = filtered_df.astype(str).apply(lambda x: ' '.join(x).lower(), axis=1)
+        mask = row_strings.apply(lambda row: all(word in row for word in search_words))
+        results = filtered_df[mask]
 
         if not results.empty:
-            st.success(f"Found {len(results)} matches")
+            st.success(f"Found {len(results)} records in {selected_sub if selected_sub != 'All SubDivisions' else 'all areas'}.")
             for _, row in results.iterrows():
-                with st.expander(f"📌 {row.get('NAME', 'N/A')} | SAP: {row.get('ACCOUNT_NO', 'N/A')}"):
+                with st.expander(f"👤 {row.get('NAME', 'N/A')} | SAP ID: {row.get('ACCOUNT_NO', 'N/A')}"):
                     c1, c2, c3 = st.columns(3)
                     with c1:
-                        st.subheader("🆔 IDs")
-                        st.write(f"**SAP Account:** `{row.get('ACCOUNT_NO')}`")
-                        st.write(f"**Legacy ID:** `{row.get('OLD_LEGACY_ID')}`")
+                        st.write(f"**Account ID:** `{row.get('ACCOUNT_NO')}`")
+                        st.write(f"**Legacy ID:** `{row.get('LEGACYACCTID', row.get('OLD_LEGACY_ID', 'N/A'))}`")
+                        st.write(f"**SubDivision:** {row.get('SubDivision', 'N/A')}")
                     with c2:
-                        st.subheader("⚡ Meter")
-                        st.write(f"**Meter No:** `{row.get('FINAL_METER')}`")
+                        st.write(f"**Meter:** `{row.get('METER_NUMBER', row.get('MTR_SER_NO', 'N/A'))}`")
                         st.write(f"**MRU:** {row.get('Village/MRU', 'N/A')}")
+                        st.write(f"**Source File:** {row.get('SOURCE_FILE')}")
                     with c3:
-                        st.subheader("📍 Location")
-                        st.write(f"**Address:** {row.get('ADDRESS')}")
+                        st.write(f"**Address:** {row.get('ADDRESS', 'N/A')}")
                         if pd.notnull(row.get('LATITUDE')):
-                            st.link_button("🌐 View on Map", f"https://www.google.com/maps/search/?api=1&query={row['LATITUDE']},{row['LONGITUDE']}")
+                            st.link_button("🌐 Map", f"https://www.google.com/maps?q={row['LATITUDE']},{row['LONGITUDE']}")
         else:
-            st.warning("No matches found.")
+            st.warning("No records found with these filters. Try changing 'All SubDivisions'.")
