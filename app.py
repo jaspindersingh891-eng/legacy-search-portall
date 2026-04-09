@@ -3,7 +3,12 @@ import pandas as pd
 import os
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Sangrur Field Search Portal", layout="wide")
+# This 'expanded' setting makes the sidebar stay open by default
+st.set_page_config(
+    page_title="Sangrur Field Search Portal", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 def make_columns_unique(df):
     """Ensures all columns have unique names to prevent system crashes."""
@@ -31,17 +36,15 @@ def load_all_data():
             temp_df = pd.read_csv(file, low_memory=False)
             temp_df.columns = temp_df.columns.str.strip()
             
-            # 1. Standardize the IDs for Display
+            # Standardize IDs
             if 'ACCOUNT_NO' in temp_df.columns:
                  temp_df['SAP_ID'] = temp_df['ACCOUNT_NO'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
             
-            # Map various names to 'Legacy Account'
             for leg_col in ['LEGACYACCTID', 'ACCTID', 'OLD_ACCOUNT', 'LEGACY_ID']:
                 if leg_col in temp_df.columns:
                     temp_df['LEGACY_DISPLAY'] = temp_df[leg_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
                     break
 
-            # 2. Map various names to 'Meter Serial'
             if 'METER_NUMBER' in temp_df.columns:
                 temp_df['METER_DISPLAY'] = temp_df['METER_NUMBER'].astype(str).str.replace(r'\.0$', '', regex=True)
             elif 'MTR_SER_NO' in temp_df.columns:
@@ -56,11 +59,9 @@ def load_all_data():
     if not data_list:
         return None
 
-    # Stack all files
     combined_df = pd.concat(data_list, axis=0, ignore_index=True, sort=False)
     
-    # --- DE-DUPLICATION STEP ---
-    # If SAP_ID, Name, and Legacy ID are all the same, keep only 1 row
+    # Remove Duplicates
     if 'SAP_ID' in combined_df.columns and 'NAME' in combined_df.columns:
         combined_df = combined_df.drop_duplicates(subset=['SAP_ID', 'NAME'], keep='first')
     
@@ -69,13 +70,16 @@ def load_all_data():
 # --- LOAD DATA ---
 df = load_all_data()
 
-# --- SIDEBAR: SUBDIVISION FILTER ---
-st.sidebar.header("📂 Filter by Area")
-selected_sub = "All SubDivisions"
-
-if df is not None and 'SubDivision' in df.columns:
-    sub_options = ["All SubDivisions"] + sorted(df['SubDivision'].dropna().unique().tolist())
-    selected_sub = st.sidebar.selectbox("Select SubDivision:", sub_options)
+# --- SIDEBAR: ALWAYS OPEN ---
+with st.sidebar:
+    st.header("📂 Filter by Area")
+    selected_sub = "All SubDivisions"
+    if df is not None and 'SubDivision' in df.columns:
+        sub_options = ["All SubDivisions"] + sorted(df['SubDivision'].dropna().unique().tolist())
+        selected_sub = st.selectbox("Select SubDivision:", sub_options)
+    
+    st.markdown("---")
+    st.caption("Developed for Sangrur Division Field Staff")
 
 # --- MAIN INTERFACE ---
 st.title("⚡ Sangrur Field Search Portal")
@@ -100,9 +104,8 @@ if df is not None:
         results = filtered_df[mask]
 
         if not results.empty:
-            st.success(f"Found {len(results)} unique record(s).")
+            st.success(f"Found {len(results)} record(s).")
             for _, row in results.iterrows():
-                # Display the exact details you requested
                 with st.expander(f"👤 {row.get('NAME', 'N/A')} | SAP: {row.get('SAP_ID', 'N/A')}"):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -115,8 +118,6 @@ if df is not None:
                         st.write(f"**Meter Serial Number:** `{row.get('METER_DISPLAY', 'N/A')}`")
                         
                         if pd.notnull(row.get('LATITUDE')) and pd.notnull(row.get('LONGITUDE')):
-                            st.link_button("🌐 Open Location in Google Maps", f"https://www.google.com/maps?q={row['LATITUDE']},{row['LONGITUDE']}")
-                        else:
-                            st.write("**Location:** Not available (Coordinates missing)")
+                            st.link_button("🌐 View Map", f"https://www.google.com/maps?q={row['LATITUDE']},{row['LONGITUDE']}")
         else:
             st.warning("No matches found.")
